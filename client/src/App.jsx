@@ -8,6 +8,7 @@ function App() {
   const [brushSize, setBrushSize] = useState(4);
   const [roomInput, setRoomInput] = useState(DEFAULT_ROOM);
   const [roomId, setRoomId] = useState(DEFAULT_ROOM);
+  const [userCount, setUserCount] = useState(1);
 
   const canvasRef = useRef(null);
   const ctxRef = useRef(null);
@@ -59,18 +60,21 @@ function App() {
   }, []);
 
   useEffect(() => {
-    socket.emit("joinRoom", roomId);
-
     function handleJoinedRoom(joinedRoomId) {
       setRoomId(joinedRoomId);
       setRoomInput(joinedRoomId);
       clearCanvas();
     }
 
+    // React stores the latest count for the active room so the UI updates automatically.
+    // The server remains the source of truth because it can see Socket.io room membership.
     socket.on("joinedRoom", handleJoinedRoom);
+    socket.on("roomUserCount", setUserCount);
+    socket.emit("joinRoom", roomId);
 
     return () => {
       socket.off("joinedRoom", handleJoinedRoom);
+      socket.off("roomUserCount", setUserCount);
     };
   }, [roomId]);
 
@@ -130,6 +134,7 @@ function App() {
         </label>
         <button type="submit" style={{ marginLeft: "8px" }}>Join</button>
         <span style={{ marginLeft: "12px" }}>Current room: {roomId}</span>
+        <span style={{ marginLeft: "12px" }}>Users: {userCount}</span>
       </form>
       <div style={{ marginBottom: "10px" }}>
         <button onClick={() => setColor("black")}>Black</button>
