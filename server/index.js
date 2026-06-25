@@ -29,6 +29,7 @@ function emitRoomUserCount(roomId) {
   // rooms.get(roomId) returns a Set of socket IDs, so its size is the live user count.
   const room = io.sockets.adapter.rooms.get(roomId);
   const userCount = room ? room.size : 0;
+ 
 
   io.to(roomId).emit("roomUserCount", userCount);
 }
@@ -66,6 +67,12 @@ io.on("connection", (socket) => {
 
   socket.on("draw", (data) => {
     socket.to(socket.data.roomId).emit("draw", data);
+  });
+
+  // Stroke completion lets each client close its local history entry.
+  // Undo and redo are intentionally not emitted, so they remain local-only.
+  socket.on("endStroke", (data) => {
+    socket.to(socket.data.roomId).emit("endStroke", data);
   });
 
   console.log("A user connected:", socket.id);
