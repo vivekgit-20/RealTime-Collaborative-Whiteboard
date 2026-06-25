@@ -6,6 +6,7 @@ const DEFAULT_ROOM = "lobby";
 function App() {
   const [color, setColor] = useState("black");
   const [brushSize, setBrushSize] = useState(4);
+  const [tool, setTool] = useState("pencil");
   const [roomInput, setRoomInput] = useState(DEFAULT_ROOM);
   const [roomId, setRoomId] = useState(DEFAULT_ROOM);
   const [userCount, setUserCount] = useState(1);
@@ -37,14 +38,67 @@ function App() {
 
     ctx.strokeStyle = stroke.color;
     ctx.lineWidth = stroke.brushSize;
-    ctx.beginPath();
-    ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
 
-    stroke.points.slice(1).forEach(({ x, y }) => {
-      ctx.lineTo(x, y);
-    });
+    const strokeTool = stroke.tool || "pencil";
 
-    ctx.stroke();
+    if (strokeTool === "pencil") {
+      ctx.beginPath();
+      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+      stroke.points.slice(1).forEach(({ x, y }) => {
+        ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    } else if (strokeTool === "line") {
+      ctx.beginPath();
+      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+      ctx.lineTo(stroke.points[1].x, stroke.points[1].y);
+      ctx.stroke();
+    } else if (strokeTool === "rectangle") {
+      ctx.beginPath();
+      const x1 = stroke.points[0].x;
+      const y1 = stroke.points[0].y;
+      const x2 = stroke.points[1].x;
+      const y2 = stroke.points[1].y;
+      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    } else if (strokeTool === "circle") {
+      ctx.beginPath();
+      const x1 = stroke.points[0].x;
+      const y1 = stroke.points[0].y;
+      const x2 = stroke.points[1].x;
+      const y2 = stroke.points[1].y;
+      const radius = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+      ctx.arc(x1, y1, radius, 0, 2 * Math.PI);
+      ctx.stroke();
+    } else if (strokeTool === "arrow") {
+      const x1 = stroke.points[0].x;
+      const y1 = stroke.points[0].y;
+      const x2 = stroke.points[1].x;
+      const y2 = stroke.points[1].y;
+
+      // Draw arrow shaft
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+
+      // Draw arrowhead
+      const angle = Math.atan2(y2 - y1, x2 - x1);
+      const headLength = Math.max(10, stroke.brushSize * 3);
+      const headAngle = Math.PI / 6; // 30 degrees
+
+      ctx.beginPath();
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(
+        x2 - headLength * Math.cos(angle - headAngle),
+        y2 - headLength * Math.sin(angle - headAngle)
+      );
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(
+        x2 - headLength * Math.cos(angle + headAngle),
+        y2 - headLength * Math.sin(angle + headAngle)
+      );
+      ctx.stroke();
+    }
   }, []);
 
   const drawStrokeSegment = useCallback((stroke) => {
@@ -67,6 +121,14 @@ function App() {
     // Redraw always starts with a blank canvas, then replays every active stroke in order.
     clearCanvas();
     strokeHistoryRef.current.forEach(drawStroke);
+
+    // Draw active remote strokes to preview shape drawing in real-time
+    remoteStrokesRef.current.forEach(drawStroke);
+
+    // Draw local active preview
+    if (currentStrokeRef.current) {
+      drawStroke(currentStrokeRef.current);
+    }
   }, [clearCanvas, drawStroke]);
 
   const recordCompletedStroke = useCallback((stroke) => {
@@ -98,8 +160,9 @@ function App() {
     ctxRef.current = ctx;
 
     // 2 Socket listeners
-    function handleBeginPath({ strokeId, x, y, color, brushSize }) {
+    function handleBeginPath({ strokeId, x, y, color, brushSize, tool }) {
       remoteStrokesRef.current.set(strokeId, {
+        tool: tool || "pencil",
         color,
         brushSize,
         points: [{ x, y }],
@@ -110,8 +173,18 @@ function App() {
       const stroke = remoteStrokesRef.current.get(strokeId);
       if (!stroke) return;
 
-      stroke.points.push({ x, y });
-      drawStrokeSegment(stroke);
+      const strokeTool = stroke.tool || "pencil";
+      if (strokeTool === "pencil") {
+        stroke.points.push({ x, y });
+        drawStrokeSegment(stroke);
+      } else {
+        if (stroke.points.length === 1) {
+          stroke.points.push({ x, y });
+        } else {
+          stroke.points[1] = { x, y };
+        }
+        redrawCanvas();
+      }
     }
 
     function handleEndStroke({ strokeId }) {
@@ -120,6 +193,7 @@ function App() {
 
       remoteStrokesRef.current.delete(strokeId);
       recordCompletedStroke(stroke);
+      redrawCanvas();
     }
 
     socket.on("beginPath", handleBeginPath);
@@ -132,7 +206,7 @@ function App() {
       socket.off("draw", handleDraw);
       socket.off("endStroke", handleEndStroke);
     };
-  }, [drawStrokeSegment, recordCompletedStroke]);
+  }, [drawStrokeSegment, recordCompletedStroke, redrawCanvas]);
 
   useEffect(() => {
     function handleJoinedRoom(joinedRoomId) {
@@ -164,6 +238,7 @@ function App() {
 
     currentStrokeRef.current = {
       strokeId,
+      tool,
       color,
       brushSize,
       points: [{ x: offsetX, y: offsetY }],
@@ -171,6 +246,7 @@ function App() {
 
     socket.emit("beginPath", {
       strokeId,
+      tool,
       x: offsetX,
       y: offsetY,
       color,
@@ -183,8 +259,18 @@ function App() {
     if (!drawing.current || !stroke) return;
 
     const { offsetX, offsetY } = e.nativeEvent;
-    stroke.points.push({ x: offsetX, y: offsetY });
-    drawStrokeSegment(stroke);
+
+    if (stroke.tool === "pencil") {
+      stroke.points.push({ x: offsetX, y: offsetY });
+      drawStrokeSegment(stroke);
+    } else {
+      if (stroke.points.length === 1) {
+        stroke.points.push({ x: offsetX, y: offsetY });
+      } else {
+        stroke.points[1] = { x: offsetX, y: offsetY };
+      }
+      redrawCanvas();
+    }
 
     socket.emit("draw", {
       strokeId: stroke.strokeId,
@@ -202,11 +288,13 @@ function App() {
     drawing.current = false;
     currentStrokeRef.current = null;
     recordCompletedStroke({
+      tool: stroke.tool,
       color: stroke.color,
       brushSize: stroke.brushSize,
       points: stroke.points,
     });
     socket.emit("endStroke", { strokeId: stroke.strokeId });
+    redrawCanvas();
   };
 
   const undo = () => {
@@ -254,10 +342,63 @@ function App() {
         <span style={{ marginLeft: "12px" }}>Users: {userCount}</span>
       </form>
       <div style={{ marginBottom: "10px" }}>
+        <span style={{ marginRight: "6px", fontWeight: "bold" }}>Colors:</span>
         <button onClick={() => setColor("black")}>Black</button>
         <button onClick={() => setColor("red")}>Red</button>
         <button onClick={() => setColor("blue")}>Blue</button>
         <button onClick={() => setColor("green")}>Green</button>
+
+        <span style={{ marginLeft: "12px", marginRight: "6px", fontWeight: "bold" }}>Tools:</span>
+        <button
+          onClick={() => setTool("pencil")}
+          style={{
+            borderColor: tool === "pencil" ? "#646cff" : "transparent",
+            boxShadow: tool === "pencil" ? "0 0 0 2px #646cff" : "none",
+            marginRight: "4px"
+          }}
+        >
+          Pencil
+        </button>
+        <button
+          onClick={() => setTool("line")}
+          style={{
+            borderColor: tool === "line" ? "#646cff" : "transparent",
+            boxShadow: tool === "line" ? "0 0 0 2px #646cff" : "none",
+            marginRight: "4px"
+          }}
+        >
+          Line
+        </button>
+        <button
+          onClick={() => setTool("rectangle")}
+          style={{
+            borderColor: tool === "rectangle" ? "#646cff" : "transparent",
+            boxShadow: tool === "rectangle" ? "0 0 0 2px #646cff" : "none",
+            marginRight: "4px"
+          }}
+        >
+          Rectangle
+        </button>
+        <button
+          onClick={() => setTool("circle")}
+          style={{
+            borderColor: tool === "circle" ? "#646cff" : "transparent",
+            boxShadow: tool === "circle" ? "0 0 0 2px #646cff" : "none",
+            marginRight: "4px"
+          }}
+        >
+          Circle
+        </button>
+        <button
+          onClick={() => setTool("arrow")}
+          style={{
+            borderColor: tool === "arrow" ? "#646cff" : "transparent",
+            boxShadow: tool === "arrow" ? "0 0 0 2px #646cff" : "none",
+            marginRight: "12px"
+          }}
+        >
+          Arrow
+        </button>
 
         <select value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))}>
           <option value="2">2px</option>
