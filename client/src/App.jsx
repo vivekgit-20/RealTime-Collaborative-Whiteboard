@@ -215,17 +215,25 @@ function App() {
       resetHistory();
     }
 
+    function handleRoomHistory(history) {
+      strokeHistoryRef.current = history || [];
+      redrawCanvas();
+      setHistoryVersion((version) => version + 1);
+    }
+
     // React stores the latest count for the active room so the UI updates automatically.
     // The server remains the source of truth because it can see Socket.io room membership.
     socket.on("joinedRoom", handleJoinedRoom);
+    socket.on("roomHistory", handleRoomHistory);
     socket.on("roomUserCount", setUserCount);
     socket.emit("joinRoom", roomId);
 
     return () => {
       socket.off("joinedRoom", handleJoinedRoom);
+      socket.off("roomHistory", handleRoomHistory);
       socket.off("roomUserCount", setUserCount);
     };
-  }, [resetHistory, roomId]);
+  }, [resetHistory, roomId, redrawCanvas]);
 
   // -------------------------------
   // Mouse events (local + emit)

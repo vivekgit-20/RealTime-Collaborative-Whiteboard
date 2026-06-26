@@ -17,6 +17,31 @@ const io = new Server(server, {
 const DEFAULT_ROOM = "lobby";
 const PORT = process.env.PORT || 5000;
 
+// In-memory store for room stroke histories.
+// Maps roomId (string) -> Array of completed stroke objects.
+const roomHistories = new Map();
+
+// In-memory store for active, in-progress strokes.
+// Maps strokeId (string) -> Stroke object.
+const activeStrokes = new Map();
+
+// Helper to retrieve/initialize history for a room
+function getRoomHistory(roomId) {
+  if (!roomHistories.has(roomId)) {
+    roomHistories.set(roomId, []);
+  }
+  return roomHistories.get(roomId);
+}
+
+// Helper to clean up active strokes for a specific socket ID when a user disconnects
+function cleanupActiveStrokes(socketId) {
+  for (const strokeId of activeStrokes.keys()) {
+    if (strokeId.startsWith(`${socketId}-`)) {
+      activeStrokes.delete(strokeId);
+    }
+  }
+}
+
 function normalizeRoomId(roomId) {
   if (typeof roomId !== "string") return DEFAULT_ROOM;
 
@@ -54,24 +79,52 @@ io.on("connection", (socket) => {
     }
 
     socket.emit("joinedRoom", nextRoomId);
+    // Send the joining client the complete drawing history for their new room
+    socket.emit("roomHistory", getRoomHistory(nextRoomId));
     emitRoomUserCount(nextRoomId);
   });
 
   socket.on("beginPath", (data) => {
+    // Reconstruct the active stroke on the server
+    const { strokeId, tool, x, y, color, brushSize } = data;
+    if (strokeId) {
+      activeStrokes.set(strokeId, {
+        tool: tool || "pencil",
+        color,
+        brushSize,
+        points: [{ x, y }]
+      });
+    }
     socket.to(socket.data.roomId).emit("beginPath", data);
   });
 
   socket.on("clearBoard", () => {
+    // Wipe the room's drawing history on the server
+    roomHistories.set(socket.data.roomId, []);
     socket.to(socket.data.roomId).emit("clearBoard");
   });
 
   socket.on("draw", (data) => {
+    // Append coordinates to the active in-progress stroke
+    const { strokeId, x, y } = data;
+    const stroke = activeStrokes.get(strokeId);
+    if (stroke) {
+      stroke.points.push({ x, y });
+    }
     socket.to(socket.data.roomId).emit("draw", data);
   });
 
   // Stroke completion lets each client close its local history entry.
   // Undo and redo are intentionally not emitted, so they remain local-only.
   socket.on("endStroke", (data) => {
+    // Save the finished stroke in the room history
+    const { strokeId } = data;
+    const stroke = activeStrokes.get(strokeId);
+    if (stroke) {
+      activeStrokes.delete(strokeId);
+      const history = getRoomHistory(socket.data.roomId);
+      history.push(stroke);
+    }
     socket.to(socket.data.roomId).emit("endStroke", data);
   });
 
@@ -87,6 +140,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
+    cleanupActiveStrokes(socket.id);
     console.log("User disconnected:", socket.id);
   });
 });
